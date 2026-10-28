@@ -1,0 +1,333 @@
+---
+title: "Análisis exploratorio del consumo de recursos en Google Cluster Data 2019"
+subtitle: "Estadística aplicada con R sobre las trazas Borg v3 (mayo de 2019)"
+author: "Harrison Arley Baldion Jojoa"
+date: today
+lang: es
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    embed-resources: true
+    theme: cosmo
+    fig-align: center
+    df-print: kable
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup}
+# El informe se renderiza desde reporte/; la raíz del proyecto es la carpeta superior.
+raiz <- normalizePath("..")
+ruta <- function(...) file.path(raiz, ...)
+
+suppressPackageStartupMessages({
+  library(dplyr); library(readr); library(tidyr); library(knitr); library(arrow)
+})
+
+leer_res <- function(nombre) {
+  f <- ruta("results", paste0(nombre, ".csv"))
+  if (file.exists(f)) readr::read_csv(f, show_col_types = FALSE) else NULL
+}
+tabla <- function(df, digitos = 4, ...) {
+  if (is.null(df)) return(cat("*Tabla no disponible: ejecuta main.R.*\n"))
+  knitr::kable(df, digits = digitos, format.args = list(big.mark = ".", decimal.mark = ","), ...)
+}
+num <- function(x, d = 3) format(round(x, d), big.mark = ".", decimal.mark = ",", nsmall = 0, scientific = FALSE)
+pct <- function(x, d = 1) paste0(format(round(100 * x, d), decimal.mark = ","), " %")
+
+source(ruta("config.R"))   # parámetros usados en el análisis
+meta <- read_csv(ruta("data", "raw", "metadatos_extraccion.csv"), show_col_types = FALSE)
+es_simulado <- identical(meta$fuente[1], "simulado")
+```
+
+```{r aviso-simulado, results='asis'}
+if (es_simulado) {
+  cat(":::{.callout-warning}\n## Datos simulados\n",
+      "Este informe se generó con **datos sintéticos** (`CONFIG$fuente_datos = \"simulado\"`) ",
+      "únicamente para verificar que el flujo funciona. Las cifras y gráficos **no** describen ",
+      "Google Cluster Data y no deben usarse como resultados. Ejecuta la extracción desde BigQuery ",
+      "y vuelve a renderizar.\n:::\n")
+}
+```
+
+# Introducción
+
+Los centros de datos a gran escala ejecutan simultáneamente millones de tareas con requisitos y
+prioridades muy distintos. Comprender cómo se distribuye y varía en el tiempo su consumo de CPU y
+memoria es la base para dimensionar la capacidad, diseñar políticas de planificación y construir
+modelos de predicción de carga. Este trabajo analiza estadísticamente, con R, una muestra
+representativa y agregados poblacionales de las trazas públicas de Google Cluster Data 2019.
+
+**Objetivo general.** Analizar estadísticamente el consumo de recursos y el comportamiento temporal
+de las cargas de trabajo de Google Cluster Data mediante R.
+
+**Objetivos específicos.**
+
+1. Describir la distribución del uso de CPU y memoria.
+2. Analizar la frecuencia y proporción de registros por prioridad o categoría.
+3. Comparar el consumo de recursos entre grupos de tareas.
+4. Examinar la relación entre CPU y memoria.
+5. Identificar patrones temporales, picos de utilización y valores atípicos.
+6. Preparar los datos para un posible modelo predictivo posterior, sin presentar predicciones como
+   resultados si no se ha entrenado y evaluado un modelo.
+
+# Procedencia y descripción de los datos
+
+**Quién los publica.** Google, en el repositorio oficial
+[google/cluster-data](https://github.com/google/cluster-data). La versión 2019
+([ClusterData2019.md](https://github.com/google/cluster-data/blob/master/ClusterData2019.md)) es la
+tercera versión de las trazas (formato v3) y tiene licencia
+[CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+**Qué representan.** La actividad de ocho celdas (clústeres) gestionadas por Borg, el sistema de
+gestión de clústeres de Google, durante mayo de 2019: envíos y planificación de trabajos
+(*collections*) y tareas (*instances*), eventos de máquinas y mediciones de uso de recursos. Según la
+página oficial, no contienen información sobre usuarios finales ni sus datos. Respecto a la versión
+de 2011, incorporan histogramas de uso de CPU por ventana de 5 minutos, información de *alloc sets*
+y relaciones padre-hijo entre trabajos.
+
+**Cómo se recopilaron.** El propio planificador de Borg registra los eventos del ciclo de vida
+(SUBMIT, SCHEDULE, FINISH, EVICT…) y los agentes de cada máquina miden el uso de recursos de cada
+instancia en ventanas de unos 300 s. CPU y memoria se publican **normalizadas** (NCU y unidad de
+memoria normalizada, escaladas respecto a la máquina más grande de la traza), por lo que no se
+expresan en núcleos ni en bytes. Los tiempos están en **microsegundos desde el origen de la traza**,
+no en fechas de calendario.
+
+**Acceso.** Los datos (unos 2,4 TiB comprimidos) solo se distribuyen mediante Google BigQuery, en el
+proyecto público `google.com:google-cluster-data`, un *dataset* por celda
+(`clusterdata_2019_a` … `clusterdata_2019_h`) con las tablas `machine_events`, `collection_events`,
+`instance_events` e `instance_usage`. El esquema de cada campo está definido en
+[clusterdata_trace_format_v3.proto](https://github.com/google/cluster-data/blob/master/clusterdata_trace_format_v3.proto)
+y descrito en el documento *Google cluster-usage traces v3* enlazado desde ClusterData2019.md.
+
+```{r datos-extraccion}
+tabla(meta |> mutate(across(everything(), as.character)) |>
+        pivot_longer(everything(), names_to = "campo", values_to = "valor"),
+      caption = "Metadatos de la extracción utilizada en este informe")
+```
+
+**Diseño del muestreo.** Para no descargar el conjunto completo se combinan dos tipos de datos:
+
+* **Muestra** (`sql/02_muestra_uso_instancias.sql`): todas las ventanas de uso de una de cada
+  `r meta$modulo_muestra[1]` colecciones, seleccionadas de forma determinista con
+  `FARM_FINGERPRINT(collection_id)`. Es una muestra por conglomerados (colecciones), reproducible y
+  que conserva la estructura temporal de cada tarea.
+* **Agregados poblacionales** calculados en BigQuery sobre todos los registros de la celda: capacidad
+  de la celda, utilización por hora y nivel de prioridad, y conteo de eventos por tipo.
+
+# Diccionario de variables
+
+```{r diccionario}
+dic <- read_csv(ruta("docs", "diccionario_datos.csv"), show_col_types = FALSE)
+tabla(dic |> select(nombre_original, nombre_r, origen, descripcion, tipo_dato_r, unidad, fuente,
+                    utilidad_analitica),
+      caption = "Diccionario de datos: variables originales y derivadas")
+```
+
+# Metodología de preparación
+
+```{r calidad}
+tabla(leer_res("calidad_controles"), caption = "Controles de calidad sobre la muestra cruda")
+tabla(leer_res("calidad_rangos_recursos"), digitos = 6,
+      caption = "Rangos observados de las variables de recursos (unidades normalizadas)")
+tabla(leer_res("registro_transformaciones"),
+      caption = "Registro de transformaciones aplicadas (en orden)")
+```
+
+Criterios principales:
+
+* Solo se eliminan errores demostrables (duplicados exactos, CPU/memoria faltante, valores
+  negativos, ventanas con fin anterior al inicio). Los valores extremos **se conservan** y se marcan.
+* Se excluyen las instancias que corren dentro de *alloc sets*, como en el cuaderno oficial de
+  análisis, para no mezclar reservas con tareas.
+* El tiempo se transforma solo a escalas relativas (horas y días desde el origen, hora del ciclo de
+  24 h). No se asignan fechas ni horas locales.
+* Para comparar grupos se usa también una tabla a nivel instancia (media por tarea), de modo que las
+  tareas de larga duración no dominen las comparaciones.
+
+# Estadística descriptiva
+
+Las tablas `muestra_*` son estimaciones sobre la muestra de colecciones (desviación estándar y
+varianza muestrales, con denominador *n − 1*). Las tablas `poblacion_*` provienen de agregados sobre
+todos los registros de la celda.
+
+```{r descriptivos}
+tabla(leer_res("muestra_descriptivos_registro") |>
+        select(variable, n_validos, n_faltantes, media, mediana, desv_est, varianza, minimo, q1, q3,
+               maximo, rango_iqr, asimetria), digitos = 5,
+      caption = "Descriptivos de las variables numéricas (muestra, nivel registro)")
+tabla(leer_res("muestra_descriptivos_por_nivel") |>
+        select(nivel_prioridad, variable, n_validos, media, mediana, desv_est, q1, q3, rango_iqr),
+      digitos = 5, caption = "CPU y memoria por nivel de prioridad (muestra, nivel registro)")
+tabla(leer_res("muestra_frecuencias"), caption = "Frecuencias absolutas y relativas (muestra)")
+tabla(leer_res("poblacion_frecuencia_eventos_tipo"),
+      caption = "Frecuencia de eventos de instancia por tipo (población)")
+tabla(leer_res("poblacion_descriptivos_serie_horaria") |>
+        select(variable, n_validos, media, mediana, desv_est, minimo, q1, q3, maximo),
+      caption = "Utilización horaria de la celda (población)")
+tabla(leer_res("muestra_faltantes_por_variable") |> filter(n_faltantes > 0),
+      caption = "Valores faltantes por variable (datos procesados)")
+cors <- leer_res("muestra_correlaciones")
+if (!is.null(cors)) {
+  tabla(cors |> filter(metodo == "spearman") |>
+          pivot_wider(names_from = var_y, values_from = correlacion) |> select(-metodo),
+        digitos = 2, caption = "Matriz de correlación de Spearman (muestra)")
+}
+```
+
+# Análisis gráfico
+
+```{r graficos, results='asis'}
+indice <- leer_res("indice_graficos")
+if (is.null(indice)) {
+  cat("*No hay gráficos: ejecuta main.R.*\n")
+} else {
+  for (i in seq_len(nrow(indice))) {
+    g <- indice[i, ]
+    cat(sprintf("\n## %s. %s\n\n", g$id, g$titulo))
+    cat(sprintf("**Pregunta analítica.** %s\n\n", g$pregunta))
+    cat(sprintf("**Variables.** %s. **Datos:** %s.\n\n", g$variables, g$datos))
+    cat(sprintf("![%s](%s){width=100%%}\n\n", g$titulo, file.path("..", "plots", g$archivo)))
+    cat(sprintf("**Cómo interpretarlo.** %s\n\n", g$interpretacion))
+  }
+}
+```
+
+# Interpretación de los resultados
+
+```{r hallazgos, results='asis'}
+d_reg   <- leer_res("muestra_descriptivos_registro")
+d_niv   <- leer_res("muestra_descriptivos_por_nivel")
+f       <- leer_res("muestra_frecuencias")
+rho     <- leer_res("muestra_prueba_correlacion_cpu_mem")
+serie   <- leer_res("poblacion_descriptivos_serie_horaria")
+picos   <- leer_res("poblacion_top10_horas_pico_cpu")
+cont    <- leer_res("muestra_contingencia_estado_nivel")
+atip    <- leer_res("muestra_resumen_atipicos")
+
+h <- character()
+if (!is.null(d_reg)) {
+  cpu <- d_reg |> filter(variable == "cpu_prom"); mem <- d_reg |> filter(variable == "mem_prom")
+  h <- c(h, sprintf(paste0(
+    "El uso medio de CPU por ventana tiene mediana %s NCU y media %s NCU (media/mediana = %s; ",
+    "asimetría = %s): la distribución está sesgada a la derecha. Para la memoria, mediana %s y media %s NMU."),
+    num(cpu$mediana, 5), num(cpu$media, 5), num(cpu$media / cpu$mediana, 2), num(cpu$asimetria, 2),
+    num(mem$mediana, 5), num(mem$media, 5)))
+}
+if (!is.null(f)) {
+  fr <- f |> filter(variable == "nivel_prioridad", unidad == "registros", !is.na(categoria)) |>
+    arrange(desc(frecuencia_abs))
+  h <- c(h, sprintf("El nivel con más registros de uso en la muestra es **%s** (%s del total).",
+                    fr$categoria[1], pct(fr$frecuencia_rel[1])))
+}
+if (!is.null(d_niv)) {
+  med <- d_niv |> filter(variable == "cpu_prom") |> arrange(desc(mediana))
+  h <- c(h, sprintf("La mediana de CPU por ventana es mayor en el nivel **%s** (%s NCU) y menor en **%s** (%s NCU).",
+                    med$nivel_prioridad[1], num(med$mediana[1], 5),
+                    med$nivel_prioridad[nrow(med)], num(med$mediana[nrow(med)], 5)))
+}
+if (!is.null(rho)) {
+  h <- c(h, sprintf("La correlación de Spearman entre CPU y memoria es rho = %s (n = %s).",
+                    num(rho$rho, 3), num(rho$n_usado, 0)))
+}
+if (!is.null(serie) && !is.null(picos)) {
+  sc <- serie |> filter(variable == "util_cpu_celda_horaria")
+  h <- c(h, sprintf(paste0("La utilización horaria de CPU de la celda tiene media %s (mín. %s, máx. %s). ",
+                           "La hora pico se da en el día %s, hora del ciclo %s, con %s."),
+                    pct(sc$media), pct(sc$minimo), pct(sc$maximo),
+                    picos$dia_indice[1], picos$hora_del_ciclo[1], pct(picos$util_cpu[1])))
+}
+if (!is.null(cont)) {
+  ev <- cont |> filter(estado_final == "EVICT")
+  if (nrow(ev) > 0) {
+    h <- c(h, paste0("Porcentaje de instancias cuyo último evento es EVICT, por nivel: ",
+                     paste(sprintf("%s %s %%", ev$nivel_prioridad, num(ev$pct_en_nivel, 1)), collapse = "; "), "."))
+  }
+}
+if (!is.null(atip)) {
+  h <- c(h, sprintf("Se marcaron %s registros atípicos de CPU (Tukey sobre log10) y %s con uso > 1 unidad normalizada.",
+                    num(sum(atip$atipicos_cpu), 0), num(sum(atip$supera_1), 0)))
+}
+cat("Hallazgos calculados automáticamente a partir de las tablas de `results/`:\n\n")
+cat(paste0("* ", h, collapse = "\n"), "\n\n")
+```
+
+::: {.callout-note}
+## Discusión (a redactar tras ejecutar con los datos reales)
+Relaciona los hallazgos anteriores con los gráficos: forma de las distribuciones (G01–G04, G11,
+G20), diferencias entre niveles (G08, G09, G17), relación CPU–memoria (G10, G12, G18, G19), patrones
+temporales y picos (G13–G15, G22, G23), atípicos (G16) y sobreasignación de recursos (G21).
+:::
+
+# Preparación para modelado predictivo
+
+**Problema propuesto.** Estimar la CPU media de una instancia en la siguiente ventana de 5 minutos a
+partir de atributos conocidos al enviar la tarea (prioridad, clase de planificación, recursos
+solicitados), variables temporales relativas y la historia reciente de la propia instancia.
+
+**Partición.** Cronológica: el primer `r 100 * CONFIG$proporcion_entrenamiento` % del tiempo de traza para entrenamiento y el
+resto para prueba (parámetro `CONFIG$proporcion_entrenamiento`). **Métricas:** MAE, RMSE y mediana del
+error absoluto, comparadas con tres modelos base (media global, media por nivel y persistencia t−1).
+
+```{r modelado}
+tabla(leer_res("modelado_variables"), caption = "Variables del modelado: objetivo, predictores y exclusiones por fuga")
+tabla(leer_res("modelado_particion"), caption = "Partición cronológica")
+met <- leer_res("modelado_metricas")
+if (!is.null(met)) {
+  tabla(met, digitos = 6, caption = "Métricas en la partición de prueba (calculadas en esta ejecución)")
+} else {
+  cat("*No se entrenaron modelos (CONFIG$entrenar_modelo_base = FALSE o datos insuficientes).*\n")
+}
+```
+
+```{r aviso-modelo, results='asis'}
+if (es_simulado) cat("> Con datos simulados las métricas solo verifican que el código funciona; no tienen valor interpretativo.\n")
+```
+
+# Limitaciones
+
+* **Muestra por conglomerados.** La muestra selecciona colecciones completas; las tareas de una
+  colección están correlacionadas, por lo que los errores estándar e intervalos calculados como si
+  fueran independientes son optimistas.
+* **Una sola celda.** Los resultados describen la celda analizada (`r meta$celda[1]`) y no se
+  generalizan automáticamente a las ocho celdas.
+* **Unidades normalizadas.** CPU y memoria están normalizadas, no en núcleos ni bytes; son
+  comparables dentro de la traza pero no con otras fuentes.
+* **Tiempo relativo.** No se dispone de una referencia de calendario verificada; la “hora del ciclo”
+  es relativa al origen de la traza, no la hora local de la celda.
+* **Censura.** Las instancias activas al terminar la traza no tienen evento terminal; su duración de
+  vida no se observa (G24).
+* **Prioridad agregada.** Se toma la prioridad máxima registrada por instancia, como en el cuaderno
+  oficial.
+* **Coste de consulta.** Las consultas sobre `instance_usage` escanean columnas de tablas muy grandes;
+  el tamaño debe controlarse con ejecuciones en seco.
+
+# Conclusiones
+
+::: {.callout-note}
+## A redactar con los resultados reales
+Responde a cada objetivo específico con los hallazgos de la sección anterior: (1) forma y dispersión
+de CPU y memoria; (2) peso relativo de cada nivel; (3) diferencias de consumo entre niveles;
+(4) intensidad de la relación CPU–memoria; (5) ciclo diario, picos y atípicos; (6) viabilidad del
+problema predictivo según la mejora del modelo frente a la persistencia.
+:::
+
+# Referencias
+
+* Google. *Google cluster data* (repositorio). <https://github.com/google/cluster-data>
+* Google. *ClusterData 2019 traces*. <https://github.com/google/cluster-data/blob/master/ClusterData2019.md>
+* Google. *clusterdata_trace_format_v3.proto* (esquema).
+  <https://github.com/google/cluster-data/blob/master/clusterdata_trace_format_v3.proto>
+* Google. *clusterdata_analysis_colab.ipynb* (cuaderno oficial de análisis).
+  <https://github.com/google/cluster-data/blob/master/clusterdata_analysis_colab.ipynb>
+* Wilkes, J. *Google cluster-usage traces v3*. Documento técnico enlazado desde ClusterData2019.md.
+* Tirmazi, M., Barker, A., Deng, N., Haque, M. E., Qin, Z. G., Hand, S., Harchol-Balter, M. y
+  Wilkes, J. (2020). Borg: the Next Generation. *EuroSys '20*. <https://research.google/pubs/pub49065/>
+* Verma, A., Pedrosa, L., Korupolu, M., Oppenheimer, D., Tune, E. y Wilkes, J. (2015). Large-scale
+  cluster management at Google with Borg. *EuroSys '15*.
+* Wickham, H. et al. (2019). Welcome to the tidyverse. *Journal of Open Source Software*, 4(43), 1686.
+* Documentación de `bigrquery`: <https://bigrquery.r-dbi.org/>
