@@ -1,0 +1,19 @@
+variable,rol,justificacion
+objetivo_cpu,objetivo,CPU media de la ventana t (NCU).
+nivel_prioridad,predictor,"Nivel derivado de la prioridad, conocida al enviar la tarea."
+prioridad,predictor,"Prioridad numérica, conocida al enviar la tarea."
+clase_planif,predictor,"Clase de latencia, conocida al enviar la tarea."
+cpu_solicitada,predictor,CPU solicitada al planificador (conocida antes de ejecutar).
+mem_solicitada,predictor,Memoria solicitada (conocida antes de ejecutar).
+hora_del_ciclo,predictor,Hora relativa del ciclo de 24 h (calendario no disponible).
+edad_instancia_h,predictor,Tiempo transcurrido desde la primera ventana observada (pasado).
+cpu_lag1,predictor,CPU de la ventana anterior contigua (pasado).
+cpu_media_lag_1_3,predictor,Media de CPU de las 3 ventanas anteriores (pasado).
+cpu_max,excluida,Se mide en la misma ventana que el objetivo (simultánea).
+ratio_pico_media_cpu,excluida,Calculada con el objetivo (cpu_max / cpu_prom): fuga directa.
+uso_rel_solicitud_cpu,excluida,Calculada con el objetivo (cpu_prom / cpu_solicitada): fuga directa.
+mem_prom,excluida,Simultánea al objetivo; solo usable con retardo.
+ciclos_por_instruccion,excluida,Simultánea al objetivo; solo usable con retardo.
+estado_final,excluida,Se conoce al terminar la instancia (información futura).
+n_eventos,excluida,Cuenta eventos de toda la vida de la instancia (información futura).
+duracion_vida_h,excluida,Depende del final de la instancia (información futura).

@@ -138,15 +138,36 @@ guardar_resultado(correlaciones, "muestra_correlaciones")
 
 # Prueba de correlación CPU-memoria (Spearman). Con n grande casi cualquier
 # correlación es "significativa": interpreta el tamaño del coeficiente.
-sub <- uso |> select(cpu_prom, mem_prom) |> filter(!is.na(cpu_prom), !is.na(mem_prom))
-set.seed(CONFIG$semilla)
-if (nrow(sub) > 100000) sub <- dplyr::slice_sample(sub, n = 100000)
-prueba <- suppressWarnings(stats::cor.test(sub$cpu_prom, sub$mem_prom, method = "spearman"))
-guardar_resultado(tibble(
-  prueba = "Spearman CPU media vs memoria media",
-  n_usado = nrow(sub), rho = unname(prueba$estimate), p_valor = prueba$p.value
-), "muestra_prueba_correlacion_cpu_mem")
+sub <- uso |>
+  dplyr::select(cpu_prom, mem_prom) |>
+  dplyr::filter(!is.na(cpu_prom), !is.na(mem_prom))
 
+set.seed(CONFIG$semilla)
+
+if (nrow(sub) > 100000) {
+  sub <- dplyr::slice_sample(sub, n = 100000)
+}
+
+prueba_cor <- suppressWarnings(
+  stats::cor.test(
+    sub$cpu_prom,
+    sub$mem_prom,
+    method = "spearman"
+  )
+)
+
+rho <- unname(prueba_cor[["estimate"]])
+p_valor <- prueba_cor[["p.value"]]
+
+guardar_resultado(
+  tibble::tibble(
+    prueba = "Spearman CPU media vs memoria media",
+    n_usado = nrow(sub),
+    rho = rho,
+    p_valor = p_valor
+  ),
+  "muestra_prueba_correlacion_cpu_mem"
+)
 # -----------------------------------------------------------------------------
 # 6. Serie horaria poblacional: utilización total de la celda
 # -----------------------------------------------------------------------------

@@ -1,0 +1,6 @@
+nivel_prioridad,n,atipicos_cpu,pct_atipicos_cpu,atipicos_mem,pct_atipicos_mem,supera_1
+free,48910,499,1.02,538,1.1,0
+beb,39803,373,0.94,206,0.52,0
+mid,7496,83,1.11,0,0,0
+prod,172873,1287,0.74,3656,2.11,0
+monitoring,18534,149,0.8,0,0,0

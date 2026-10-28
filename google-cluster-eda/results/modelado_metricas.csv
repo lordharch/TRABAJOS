@@ -1,0 +1,5 @@
+modelo,n_prueba,MAE,RMSE,MedAE,mejora_MAE_vs_persistencia_pct,datos,nota
+Base: media global,59655,0.006583425697017312,0.00946329055212807,0.00582605297135798,-103.81,simulado,Métricas calculadas en esta ejecución sobre la partición de prueba cronológica.
+Base: media por nivel,59655,0.006622879146224214,0.009474064337743645,0.00575877848531136,-105.03,simulado,Métricas calculadas en esta ejecución sobre la partición de prueba cronológica.
+Base: persistencia (t-1),59655,0.003230130936347227,0.006047832967299472,0.0015229167950757813,0,simulado,Métricas calculadas en esta ejecución sobre la partición de prueba cronológica.
+Regresión lineal log10,59655,0.0025697405758789726,0.004868536438345941,0.0012165347350180915,20.44,simulado,Métricas calculadas en esta ejecución sobre la partición de prueba cronológica.

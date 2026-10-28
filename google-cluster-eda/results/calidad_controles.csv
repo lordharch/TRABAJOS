@@ -1,0 +1,11 @@
+control,n,pct
+Duplicados exactos,200,0.0695
+"Duplicados por clave (colección, instancia, máquina, inicio)",200,0.0695
+CPU media faltante,20,0.0069
+Memoria media faltante,0,0
+Valores no finitos (Inf/NaN),0,0
+Valores negativos de CPU o memoria,0,0
+Ventana inválida (fin <= inicio o faltante),0,0
+CPU o memoria media > 1 (unidad normalizada),0,0
+CPU máxima < CPU media (incoherencia),0,0
+Sin prioridad (no encontrada en instance_events),0,0

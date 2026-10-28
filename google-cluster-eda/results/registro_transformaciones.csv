@@ -1,0 +1,11 @@
+paso,tabla,accion,justificacion,filas_antes,filas_despues
+1,muestra_uso_instancias,Importación,Lectura de data/raw/,,287836
+2,uso,Eliminar duplicados exactos,Filas idénticas en todas las columnas: artefacto de exportación o unión.,287836,287636
+3,uso,Eliminar registros sin CPU o memoria media,Sin la variable principal no puede usarse en el análisis de recursos.,287636,287616
+4,uso,Eliminar valores negativos y ventanas inválidas,Uso negativo o fin <= inicio son imposibles por definición.,287616,287616
+5,uso,Marcar (no eliminar) uso > 1 y atípicos,Pueden ser comportamiento real o error; se analizan en 04 (gráfico de atípicos).,287616,287616
+6,uso,Crear variables temporales relativas,"hora_traza = start_time / 3,6e9; dia_indice y hora_del_ciclo derivados. Sin fechas de calendario.",287616,287616
+7,uso,Crear categorías,nivel_prioridad (rangos del cuaderno oficial + monitoring >= 360); etiquetas de enums del proto v3.,287616,287616
+8,uso,Crear métricas derivadas y banderas de atípicos,"Ratio pico/media, uso relativo a lo solicitado; atípicos por Tukey sobre log10.",287616,287616
+9,instancias_resumen,Agregar a nivel instancia,"Medias por (collection_id, instance_index) para comparar grupos sin ponderar por duración.",287616,3907
+10,agregado_horario,Calcular utilización relativa a la capacidad,util = suma / (12 x capacidad de la celda); serie poblacional por hora relativa.,3433,3433

@@ -1,0 +1,3 @@
+particion,n_registros,n_completos,n_instancias,corte_hora_traza
+entrenamiento,221868,212907,3061,595.3000000000001
+prueba,61870,59655,794,595.3000000000001
